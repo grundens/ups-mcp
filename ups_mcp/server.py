@@ -10,13 +10,26 @@ mcp = FastMCP("ups-mcp")
 
 # Initialize tool manager
 load_dotenv()
-if os.getenv("ENVIRONMENT") == "production":
+if (os.getenv("ENVIRONMENT") or os.getenv("UPS_ENVIRONMENT")) == "production":
     base_url = constants.PRODUCTION_URL
 else:
     base_url = constants.CIE_URL
 
-client_id = os.getenv("CLIENT_ID")
-client_secret = os.getenv("CLIENT_SECRET")
+# Accept UPS_-prefixed names as well as the bare ones.
+#
+# Why: a plugin .mcp.json cannot inject these. Cowork does not expand ${VAR}
+# there, so the only way to get credentials in is to inherit them from the
+# desktop process environment. Bare CLIENT_ID / CLIENT_SECRET are far too
+# generic to set as machine-wide user variables - they would collide with any
+# other OAuth tool on the box - so the prefixed names are what actually get set,
+# and these are read as equivalents.
+#
+# The alternative was wrapping the server in a PowerShell launcher that fetched
+# the secrets itself. That worked, but it cost ~5s of startup on every launch
+# and popped a visible console window every time the host started or retried the
+# server. Reading an env var costs nothing and spawns nothing.
+client_id = os.getenv("CLIENT_ID") or os.getenv("UPS_CLIENT_ID")
+client_secret = os.getenv("CLIENT_SECRET") or os.getenv("UPS_CLIENT_SECRET")
 
 tool_manager = tools.ToolManager(base_url=base_url, client_id=client_id, client_secret=client_secret)
 

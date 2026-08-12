@@ -1,4 +1,20 @@
 # UPS MCP Server
+
+> **This is the Grundens fork of [UPS-API/ups-mcp](https://github.com/UPS-API/ups-mcp).**
+> Upstream has had no commits since 2025-07-29. This fork carries three changes:
+>
+> 1. **`mcp[cli]` is capped below 2.0.** `mcp` 2.0.0 removed `mcp.server.fastmcp`,
+>    which `server.py` imports, so upstream's unpinned `>=1.9.4` resolves to a release
+>    the code cannot import. Upstream `v1.1.0` fails at startup today.
+> 2. **`validate_address` picks its validation mode from the country.** Upstream
+>    hardcodes `regionalrequestindicator=False`, which is the street-level path and only
+>    works for the US and Puerto Rico. Every other country, Canada included, is now sent
+>    as a regional request, which UPS does support internationally.
+> 3. **Address classification is requested by default** (request option 3 instead of 1),
+>    and the endpoint moved from the deprecated `v1` to `v2`.
+>
+> See `tests/test_validate_address_country_modes.py` for exactly what is sent per country.
+
 A Model Context Protocol (MCP) server for UPS shipping and logistics capabilities. This server enables AI systems to seamlessly integrate with UPS API tools. 
 
 Users can integrate with the MCP server to allow AI agents to facilitate tracking events on their behalf, including tracking the status of a shipment, the latest transit screen, and expected delivery date and time. Agents will be authenticated using OAuth client credentials provided by the user after application creation on the UPS Developer Portal.  

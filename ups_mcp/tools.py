@@ -17,12 +17,29 @@ class ToolManager:
             client_secret=client_secret
         )
 
-    def validate_address(self, addressLine1: str, addressLine2: str, politicalDivision1: str, politicalDivision2: str, zipPrimary: str, zipExtended: str, urbanization: str, countryCode: str):
-        url = f"{self.base_url}/api/addressvalidation/v1/1"
+    def validate_address(self, addressLine1: str, addressLine2: str, politicalDivision1: str, politicalDivision2: str, zipPrimary: str, zipExtended: str, urbanization: str, countryCode: str, requestOption: int = constants.REQUEST_OPTION_BOTH, maximumCandidateListSize: int = 3):
+        # UPS exposes two validation modes on the same endpoint, and which one is
+        # usable depends entirely on the country:
+        #
+        #   street level (regionalrequestindicator=False) - validates AddressLine
+        #       against the USPS database. US and PR ONLY. Sending a non-US/PR
+        #       address here is what makes callers conclude "UPS does not do Canada".
+        #
+        #   regional (regionalrequestindicator=True) - validates the city /
+        #       political division / postal code combination. Works internationally,
+        #       including CA. AddressLine is ignored by UPS in this mode, so it is
+        #       omitted rather than sent and silently dropped.
+        #
+        # The mode is chosen from countryCode instead of being hardcoded, so US and
+        # PR keep exactly the behaviour they had and everywhere else stops failing.
+        country = (countryCode or "").strip().upper()
+        regional = country not in constants.STREET_LEVEL_COUNTRIES
+
+        url = f"{self.base_url}/api/addressvalidation/{constants.ADDRESS_VALIDATION_VERSION}/{requestOption}"
 
         query = {
-            "regionalrequestindicator": False,
-            "maximumcandidatelistsize": 3
+            "regionalrequestindicator": regional,
+            "maximumcandidatelistsize": maximumCandidateListSize
         }
 
         token = self.token_manager.get_access_token()
@@ -33,23 +50,28 @@ class ToolManager:
             "Authorization": f"Bearer {token}"
         }
 
-        addressLineList = [addressLine1]
-
-        if addressLine2:
-            addressLineList.append(addressLine2)
-
         addressKeyFormat = {
-            "AddressLine": addressLineList,
             "PoliticalDivision2": politicalDivision2,
             "PoliticalDivision1": politicalDivision1,
             "PostcodePrimaryLow": zipPrimary,
-            "CountryCode": countryCode
+            "CountryCode": country
         }
 
-        if urbanization:
+        if not regional:
+            addressLineList = [addressLine1] if addressLine1 else []
+
+            if addressLine2:
+                addressLineList.append(addressLine2)
+
+            if addressLineList:
+                addressKeyFormat["AddressLine"] = addressLineList
+
+        # Urbanization is Puerto Rico's political division 3 and is rejected
+        # elsewhere. PostcodeExtendedLow is the US-only ZIP+4 extension.
+        if urbanization and country == "PR":
             addressKeyFormat["Urbanization"] = urbanization
 
-        if zipExtended:
+        if zipExtended and country == "US":
             addressKeyFormat["PostcodeExtendedLow"] = zipExtended
 
         address_payload = {

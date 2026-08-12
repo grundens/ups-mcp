@@ -5,14 +5,33 @@ description = "MCP server for UPS APIs"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp[cli]>=1.9.4",
+    # Upper bound added in the Grundens fork. mcp 2.0.0 removed the
+    # `mcp.server.fastmcp` module that server.py imports, so the upstream
+    # unpinned `>=1.9.4` resolves to a release this code cannot import:
+    # `uvx --from git+...@v1.1.0 ups-mcp` fails at startup with
+    # ModuleNotFoundError: No module named 'mcp.server.fastmcp'.
+    # Lift this only together with a port to the mcp 2.x server API.
+    "mcp[cli]>=1.9.4,<2",
     "requests>=2.32.4",
 ]
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/UPS-API/ups-mcp"
 
 [project.scripts]
 ups-mcp = "ups_mcp.server:main"
+
+# The project ships no build-system table, so the package is not installed into
+# the environment under test. Put the repo root on sys.path instead; adding a
+# build backend here would change how `uvx --from git+...` resolves the package,
+# which is how this server is launched in production.
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

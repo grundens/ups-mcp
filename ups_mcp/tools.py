@@ -3,6 +3,7 @@ from requests.auth import HTTPBasicAuth
 import os
 import uuid
 import json
+from . import cache
 from . import constants
 from .authorization import OAuthManager
 from dotenv import load_dotenv
@@ -18,27 +19,28 @@ class ToolManager:
         )
 
     def validate_address(self, addressLine1: str, addressLine2: str, politicalDivision1: str, politicalDivision2: str, zipPrimary: str, zipExtended: str, urbanization: str, countryCode: str, requestOption: int = constants.REQUEST_OPTION_BOTH, maximumCandidateListSize: int = 3):
-        # UPS exposes two validation modes on the same endpoint, and which one is
-        # usable depends entirely on the country:
+        # This endpoint accepts US and PR only. Everything else is rejected by UPS
+        # with 264008 "Country code and address format combination is not allowed",
+        # regardless of payload shape or the regionalrequestindicator flag - see
+        # constants.SUPPORTED_COUNTRIES for the evidence.
         #
-        #   street level (regionalrequestindicator=False) - validates AddressLine
-        #       against the USPS database. US and PR ONLY. Sending a non-US/PR
-        #       address here is what makes callers conclude "UPS does not do Canada".
-        #
-        #   regional (regionalrequestindicator=True) - validates the city /
-        #       political division / postal code combination. Works internationally,
-        #       including CA. AddressLine is ignored by UPS in this mode, so it is
-        #       omitted rather than sent and silently dropped.
-        #
-        # The mode is chosen from countryCode instead of being hardcoded, so US and
-        # PR keep exactly the behaviour they had and everywhere else stops failing.
+        # Failing here rather than forwarding the request is deliberate: the raw
+        # UPS error reads like a malformed payload and sends the reader looking
+        # for a bug in their address, when the real answer is that the country is
+        # not covered at all.
         country = (countryCode or "").strip().upper()
-        regional = country not in constants.STREET_LEVEL_COUNTRIES
+        if country not in constants.SUPPORTED_COUNTRIES:
+            raise ValueError(
+                f"UPS address validation does not support country '{country}'. "
+                f"This endpoint covers {', '.join(sorted(constants.SUPPORTED_COUNTRIES))} only "
+                f"(verified against UPS production; every other country code returns error "
+                f"264008). Use a different address-validation provider for this address."
+            )
 
         url = f"{self.base_url}/api/addressvalidation/{constants.ADDRESS_VALIDATION_VERSION}/{requestOption}"
 
         query = {
-            "regionalrequestindicator": regional,
+            "regionalrequestindicator": False,
             "maximumcandidatelistsize": maximumCandidateListSize
         }
 
@@ -57,14 +59,13 @@ class ToolManager:
             "CountryCode": country
         }
 
-        if not regional:
-            addressLineList = [addressLine1] if addressLine1 else []
+        addressLineList = [addressLine1] if addressLine1 else []
 
-            if addressLine2:
-                addressLineList.append(addressLine2)
+        if addressLine2:
+            addressLineList.append(addressLine2)
 
-            if addressLineList:
-                addressKeyFormat["AddressLine"] = addressLineList
+        if addressLineList:
+            addressKeyFormat["AddressLine"] = addressLineList
 
         # Urbanization is Puerto Rico's political division 3 and is rejected
         # elsewhere. PostcodeExtendedLow is the US-only ZIP+4 extension.
@@ -80,14 +81,22 @@ class ToolManager:
             }
         }
 
+        # USPS address data barely moves, and the same address gets re-checked a
+        # lot inside one session. Key on the payload so any changed field misses.
+        cache_key = cache.key("xav", self.base_url, requestOption,
+                              json.dumps(addressKeyFormat, sort_keys=True))
+        cached = cache.responses.get(cache_key)
+        if cached is not None:
+            return cached
+
         response = requests.post(url, headers=headers, params=query, json=address_payload)
 
         if response.status_code != 200:
             raise ValueError(f"Error validating address: {response.status_code} {response.text}")
 
-        response = response.text
-
-        return str(response)
+        result = str(response.text)
+        cache.responses.put(cache_key, result, cache.TTL_ADDRESS)
+        return result
 
     def track_package(self, inquiryNum: str, locale: str, returnSignature: bool, returnMilestones: bool, returnPOD: bool):
         url = f"{self.base_url}/api/track/v1/details/{inquiryNum}"
@@ -107,11 +116,64 @@ class ToolManager:
             "Authorization": f"Bearer {token}"
         }
 
+        cache_key = cache.key("track", self.base_url, inquiryNum, locale,
+                              returnSignature, returnMilestones, returnPOD)
+        cached = cache.responses.get(cache_key)
+        if cached is not None:
+            return cached
+
         response = requests.get(url, headers=headers, params=query)
 
         if response.status_code != 200:
             raise ValueError(f"Error tracking package: {response.text}")
 
-        response = response.text
+        result = str(response.text)
+        # TTL is read off the response: delivered packages are final, in-transit
+        # ones are not, and an unscanned label must not be cached as "not found".
+        cache.responses.put(cache_key, result, cache.tracking_ttl(result))
+        return result
 
-        return str(response)
+    def track_by_reference(self, reference: str, fromPickUpDate: str = "", toPickUpDate: str = "",
+                           destCountry: str = "", destZip: str = "", shipperNum: str = "",
+                           refNumType: str = "SmallPackage", locale: str = "en_US"):
+        """Track by a shipper-assigned reference (e.g. a NAV order number) rather than a 1Z number."""
+        url = f"{self.base_url}/api/track/v1/reference/details/{reference}"
+
+        query = {"locale": locale, "refNumType": refNumType}
+
+        # UPS defaults the search window to the last 14 days. That silently hides
+        # anything older, which reads as "no such shipment" rather than "outside
+        # the window", so the caller is given the lever explicitly.
+        if fromPickUpDate:
+            query["fromPickUpDate"] = fromPickUpDate
+        if toPickUpDate:
+            query["toPickUpDate"] = toPickUpDate
+        if destCountry:
+            query["destCountry"] = destCountry.strip().upper()
+        if destZip:
+            query["destZip"] = destZip
+        if shipperNum:
+            query["shipperNum"] = shipperNum
+
+        token = self.token_manager.get_access_token()
+
+        headers = {
+            "transId": str(uuid.uuid4()),
+            "transactionSrc": "Local MCP Server",
+            "Authorization": f"Bearer {token}"
+        }
+
+        cache_key = cache.key("trackref", self.base_url, reference,
+                              json.dumps(query, sort_keys=True))
+        cached = cache.responses.get(cache_key)
+        if cached is not None:
+            return cached
+
+        response = requests.get(url, headers=headers, params=query)
+
+        if response.status_code != 200:
+            raise ValueError(f"Error tracking by reference: {response.status_code} {response.text}")
+
+        result = str(response.text)
+        cache.responses.put(cache_key, result, cache.tracking_ttl(result))
+        return result

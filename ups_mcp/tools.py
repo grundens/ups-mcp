@@ -9,9 +9,13 @@ from .authorization import OAuthManager
 from dotenv import load_dotenv
 
 class ToolManager:
-    def __init__(self, base_url, client_id, client_secret):
+    def __init__(self, base_url, client_id=None, client_secret=None):
         self.base_url = base_url
 
+        # client_id/client_secret stay accepted so tests can inject fakes. When
+        # they are omitted, OAuthManager resolves lazily via credentials.py -
+        # environment first, then Key Vault - at the moment a token is actually
+        # needed, not at import.
         self.token_manager = OAuthManager(
             token_url=f"{self.base_url}/security/v1/oauth/token",
             client_id=client_id,

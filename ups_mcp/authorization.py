@@ -14,21 +14,22 @@ class OAuthManager:
         if self.access_token and time.time() < self.token_expiry - 60:
             return self.access_token
 
-        # Validate client credentials.
+        # Resolve credentials at the last possible moment.
         #
-        # This message is the entire new-user experience. The server starts and
-        # exposes its tools without credentials, so the first tool call is where
-        # anyone finds out something is missing. Saying "set these env vars" tells
-        # them what is wrong but not what to do, and at Grundens nobody sets these
-        # by hand: they are synced from Key Vault. So name the remedy.
+        # Not at import: a Key Vault round-trip there would slow every launch and,
+        # worse, a vault failure would stop the server attaching to the host at
+        # all. An MCP server that fails to attach is invisible - no tools, no
+        # error, nothing to act on. Attaching and failing here means the user gets
+        # the message below, which names the fix.
         if not self.client_id or not self.client_secret:
-            raise ValueError(
-                "No UPS credentials. This server reads UPS_CLIENT_ID and "
-                "UPS_CLIENT_SECRET (or CLIENT_ID / CLIENT_SECRET) from the "
-                "environment. At Grundens these are synced from Key Vault: run "
-                "/grundens-setup, then restart Claude Desktop. If that fails, you "
-                "likely need 'az login' or membership of sg-grundens-data-access."
-            )
+            from . import credentials
+            found = credentials.get_credentials()
+            if found:
+                self.client_id, self.client_secret = found
+
+        if not self.client_id or not self.client_secret:
+            from . import credentials
+            raise ValueError(credentials.failure_message())
 
         data = {
             "grant_type": "client_credentials"

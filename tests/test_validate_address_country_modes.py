@@ -9,6 +9,7 @@ those countries up front, and tracking is unaffected.
 """
 
 import json
+import os
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -193,24 +194,41 @@ def test_optional_filters_are_omitted_when_not_supplied():
 
 
 def test_missing_credentials_tell_the_user_what_to_do():
-    """The first tool call is where a new user discovers anything is wrong.
+    """The first tool call is where a user discovers anything is wrong.
 
     The server starts and lists its tools without credentials, which is the good
     failure mode, but it means this string is the entire onboarding experience.
-    Naming the env vars says what is wrong; naming /grundens-setup says what to
-    do. Keep both.
+    Credentials come from Key Vault via the operator's Azure sign-in, so the
+    remedy is 'az login' and group membership - not anything they set by hand.
     """
+    from ups_mcp import credentials
     from ups_mcp.authorization import OAuthManager
 
     mgr = OAuthManager(token_url="https://example.invalid/token",
                        client_id="", client_secret="")
-    with pytest.raises(ValueError) as exc:
-        mgr.get_access_token()
+
+    # No env credentials, and the vault unreachable.
+    with patch.object(credentials, "_from_env", return_value=None), \
+         patch.object(credentials, "_from_key_vault", return_value=None), \
+         patch.object(credentials, "_cached", None):
+        with pytest.raises(ValueError) as exc:
+            mgr.get_access_token()
 
     msg = str(exc.value)
-    assert "/grundens-setup" in msg, "the error must name the remedy, not just the symptom"
-    assert "UPS_CLIENT_ID" in msg
-    assert "restart" in msg.lower()
+    assert "az login" in msg, "the error must name the remedy, not just the symptom"
+    assert "sg-grundens-data-access" in msg
+    assert "Key Vault" in msg
+
+
+def test_environment_credentials_win_over_the_vault():
+    """An explicit override must not be silently ignored, and CI relies on it."""
+    from ups_mcp import credentials
+
+    with patch.dict(os.environ, {"UPS_CLIENT_ID": "env-id", "UPS_CLIENT_SECRET": "env-sec"}), \
+         patch.object(credentials, "_cached", None), \
+         patch.object(credentials, "_from_key_vault") as vault:
+        assert credentials.get_credentials() == ("env-id", "env-sec")
+        vault.assert_not_called()
 
 
 def test_supplied_filters_are_passed_through():

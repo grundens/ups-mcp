@@ -13,6 +13,11 @@ dependencies = [
     # Lift this only together with a port to the mcp 2.x server API.
     "mcp[cli]>=1.9.4,<2",
     "requests>=2.32.4",
+    # Read UPS credentials from Key Vault using whatever Azure sign-in the
+    # operator already has. This is what removes the per-user credential step:
+    # no env vars to sync, nothing to go stale, nothing to clobber.
+    "azure-identity>=1.19",
+    "azure-keyvault-secrets>=4.8",
 ]
 license = "MIT"
 license-files = ["LICEN[CS]E*"]

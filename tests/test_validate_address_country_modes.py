@@ -192,6 +192,27 @@ def test_optional_filters_are_omitted_when_not_supplied():
         assert key not in params
 
 
+def test_missing_credentials_tell_the_user_what_to_do():
+    """The first tool call is where a new user discovers anything is wrong.
+
+    The server starts and lists its tools without credentials, which is the good
+    failure mode, but it means this string is the entire onboarding experience.
+    Naming the env vars says what is wrong; naming /grundens-setup says what to
+    do. Keep both.
+    """
+    from ups_mcp.authorization import OAuthManager
+
+    mgr = OAuthManager(token_url="https://example.invalid/token",
+                       client_id="", client_secret="")
+    with pytest.raises(ValueError) as exc:
+        mgr.get_access_token()
+
+    msg = str(exc.value)
+    assert "/grundens-setup" in msg, "the error must name the remedy, not just the symptom"
+    assert "UPS_CLIENT_ID" in msg
+    assert "restart" in msg.lower()
+
+
 def test_supplied_filters_are_passed_through():
     params = _reference_call(reference="SP-327741-2", shipperNum="5Y7584",
                              destCountry="ca", fromPickUpDate="20260701")["params"]

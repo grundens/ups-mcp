@@ -10,10 +10,16 @@ mcp = FastMCP("ups-mcp")
 
 # Initialize tool manager
 load_dotenv()
-if (os.getenv("ENVIRONMENT") or os.getenv("UPS_ENVIRONMENT")) == "production":
-    base_url = constants.PRODUCTION_URL
-else:
-    base_url = constants.CIE_URL
+# Default to PRODUCTION. Upstream defaults to CIE, which is right for a sample
+# server and wrong for us: Grundens has no use for the test environment, and
+# making production depend on an environment variable being set on every machine
+# means one unset variable silently returns fabricated shipments. CIE hands back
+# canned data that looks real - a different tracking number than the one you
+# asked for - so the failure is quiet and misleading rather than loud.
+#
+# Opt into CIE explicitly with UPS_ENVIRONMENT=test when testing the wiring.
+_env = (os.getenv("ENVIRONMENT") or os.getenv("UPS_ENVIRONMENT") or "production").strip().lower()
+base_url = constants.CIE_URL if _env == "test" else constants.PRODUCTION_URL
 
 # Credentials resolve from the environment first, then Azure Key Vault. See
 # credentials.py for why, and for what the failure message has to say.
